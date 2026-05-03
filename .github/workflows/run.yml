@@ -3,13 +3,14 @@ name: Forward Telegram to Bale
 on:
   schedule:
     - cron: '*/10 * * * *'   # هر 10 دقیقه
-  workflow_dispatch:
+  workflow_dispatch:          # اجرای دستی
 
 jobs:
   forward:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -28,7 +29,7 @@ jobs:
 
       - name: Run bot
         env:
-          STRING_SESSION: ${{ secrets.STRING_SESSION }}
+          SESSION_BASE64: ${{ secrets.SESSION_BASE64 }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
