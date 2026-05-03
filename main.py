@@ -3,13 +3,22 @@ import json
 import os
 import re
 import tempfile
+import sys
+import traceback
+from datetime import datetime
+
 import requests
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, RPCError
 from telethon.sessions import MemorySession
 from telethon.crypto import AuthKey
 
-# ======================== خواندن از محیط ========================
+# =========================== لاگینگ پیشرفته ===========================
+def log(msg, level="INFO"):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] [{level}] {msg}", flush=True)
+
+# =========================== خواندن تنظیمات ===========================
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "").strip()
 DC_ID = int(os.environ.get("DC_ID", 0))
@@ -19,7 +28,8 @@ USER_ID = int(os.environ.get("USER_ID", 0))
 SOURCE_CHANNELS_JSON = os.environ.get("SOURCE_CHANNELS", "[]")
 try:
     SOURCE_CHANNELS = json.loads(SOURCE_CHANNELS_JSON)
-except:
+except json.JSONDecodeError as e:
+    log(f"خطا در parse JSON کانال‌ها: {e}", "ERROR")
     SOURCE_CHANNELS = []
 
 BALE_BOT_TOKEN = os.environ.get("BALE_BOT_TOKEN", "").strip()
@@ -28,18 +38,22 @@ BALE_CHANNEL_ID = int(os.environ.get("BALE_CHANNEL_ID", 0))
 STATE_FILE = "state.json"
 SLEEP_BETWEEN_MESSAGES = 1
 
-# ======================== کلاس سشن سفارشی ========================
+# =========================== کلاس سشن سفارشی ===========================
 class CustomSession(MemorySession):
     def __init__(self, dc_id, auth_key_hex, user_id=None):
         super().__init__()
         self._dc_id = dc_id
-        # تبدیل hex به bytes
-        auth_key_bytes = bytes.fromhex(auth_key_hex)
-        self._auth_key = AuthKey(data=auth_key_bytes)
+        try:
+            auth_key_bytes = bytes.fromhex(auth_key_hex)
+            self._auth_key = AuthKey(data=auth_key_bytes)
+            log(f"AuthKey ساخته شد. طول: {len(auth_key_bytes)} بایت")
+        except Exception as e:
+            log(f"خطا در ساخت AuthKey: {e}", "ERROR")
+            raise
         if user_id:
             self._user_id = user_id
 
-# ======================== توابع کمکی ========================
+# =========================== توابع کمکی ===========================
 def clean_telegram_mentions(text: str) -> str:
     if not text:
         return ""
@@ -53,9 +67,14 @@ def send_text_to_bale(text: str) -> bool:
     url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": BALE_CHANNEL_ID, "text": text, "parse_mode": "HTML"}
     try:
-        resp = requests.post(url, json=payload, timeout=15)
-        return resp.status_code == 200 and resp.json().get("ok")
-    except:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
+        else:
+            log(f"خطا در ارسال متن به بله: {resp.text}", "ERROR")
+            return False
+    except Exception as e:
+        log(f"خطای network در بله: {e}", "ERROR")
         return False
 
 def send_photo_to_bale(photo_path: str, caption: str = "") -> bool:
@@ -66,7 +85,8 @@ def send_photo_to_bale(photo_path: str, caption: str = "") -> bool:
             data = {'chat_id': BALE_CHANNEL_ID, 'caption': caption}
             resp = requests.post(url, data=data, files=files, timeout=30)
         return resp.status_code == 200 and resp.json().get("ok")
-    except:
+    except Exception as e:
+        log(f"خطا در ارسال عکس: {e}", "ERROR")
         return False
 
 def send_video_to_bale(video_path: str, caption: str = "") -> bool:
@@ -77,7 +97,8 @@ def send_video_to_bale(video_path: str, caption: str = "") -> bool:
             data = {'chat_id': BALE_CHANNEL_ID, 'caption': caption}
             resp = requests.post(url, data=data, files=files, timeout=60)
         return resp.status_code == 200 and resp.json().get("ok")
-    except:
+    except Exception as e:
+        log(f"خطا در ارسال ویدیو: {e}", "ERROR")
         return False
 
 def load_state() -> dict:
@@ -93,92 +114,179 @@ def save_state(state: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
+# =========================== تابع اصلی با مدیریت خطای دقیق ===========================
 async def main():
-    # اعتبارسنجی
-    if not API_ID or not API_HASH or not DC_ID or not AUTH_KEY_HEX or not USER_ID:
-        print("❌ یکی از متغیرهای API_ID, API_HASH, DC_ID, AUTH_KEY_HEX, USER_ID تنظیم نشده.")
+    log("=== شروع اسکریپت ===")
+    
+    # اعتبارسنجی اولیه
+    if not API_ID:
+        log("API_ID تنظیم نشده است", "ERROR")
+        return
+    if not API_HASH:
+        log("API_HASH تنظیم نشده است", "ERROR")
+        return
+    if not DC_ID:
+        log("DC_ID تنظیم نشده است", "ERROR")
+        return
+    if not AUTH_KEY_HEX:
+        log("AUTH_KEY_HEX تنظیم نشده است", "ERROR")
+        return
+    if not USER_ID:
+        log("USER_ID تنظیم نشده است", "ERROR")
         return
     if not BALE_BOT_TOKEN or not BALE_CHANNEL_ID:
-        print("❌ BALE_BOT_TOKEN یا BALE_CHANNEL_ID تنظیم نشده.")
+        log("BALE_BOT_TOKEN یا BALE_CHANNEL_ID تنظیم نشده", "ERROR")
         return
     if not SOURCE_CHANNELS:
-        print("⚠️ هیچ کانال منبعی تعریف نشده.")
+        log("SOURCE_CHANNELS خالی است", "WARNING")
         return
-
-    # ایجاد session سفارشی
-    session = CustomSession(DC_ID, AUTH_KEY_HEX, USER_ID)
-    client = TelegramClient(session, API_ID, API_HASH)
-    await client.connect()
-
-    if not await client.is_user_authorized():
-        print("❌ اطلاعات احراز هویت معتبر نیست. AUTH_KEY_HEX یا DC_ID اشتباه است.")
+    
+    log(f"API_ID = {API_ID}")
+    log(f"DC_ID = {DC_ID}")
+    log(f"USER_ID = {USER_ID}")
+    log(f"source_channels = {SOURCE_CHANNELS}")
+    log(f"bale_channel_id = {BALE_CHANNEL_ID}")
+    
+    # ساخت سشن
+    try:
+        log("ساخت CustomSession...")
+        session = CustomSession(DC_ID, AUTH_KEY_HEX, USER_ID)
+        log("CustomSession ساخته شد.")
+    except Exception as e:
+        log(f"خطا در ساخت CustomSession: {e}", "ERROR")
+        traceback.print_exc()
+        return
+    
+    # ساخت کلاینت
+    try:
+        log("ساخت TelegramClient...")
+        client = TelegramClient(session, API_ID, API_HASH)
+        log("TelegramClient ساخته شد. در حال اتصال...")
+    except Exception as e:
+        log(f"خطا در ساخت TelegramClient: {e}", "ERROR")
+        traceback.print_exc()
+        return
+    
+    try:
+        await client.connect()
+        log("اتصال برقرار شد. بررسی احراز هویت...")
+    except Exception as e:
+        log(f"خطا در connect: {e}", "ERROR")
+        traceback.print_exc()
         await client.disconnect()
         return
-
-    print("✅ اتصال به تلگرام برقرار شد.")
-
+    
+    # چک کردن احراز هویت
+    try:
+        is_auth = await client.is_user_authorized()
+        if is_auth:
+            log("✅ احراز هویت موفق. کاربر مجاز است.")
+        else:
+            log("❌ احراز هویت ناموفق. SESSION معتبر نیست.", "ERROR")
+            await client.disconnect()
+            return
+    except Exception as e:
+        log(f"خطا در بررسی is_user_authorized: {e}", "ERROR")
+        traceback.print_exc()
+        await client.disconnect()
+        return
+    
+    # بارگذاری وضعیت قبلی
     state = load_state()
     last_ids = state.get("last_message_ids", {})
     new_last_ids = last_ids.copy()
-
-    for channel_identifier in SOURCE_CHANNELS:
+    log(f"وضعیت بارگذاری شد. last_ids = {last_ids}")
+    
+    for idx, channel_identifier in enumerate(SOURCE_CHANNELS, 1):
+        log(f"--- پردازش کانال {idx}: {channel_identifier} ---")
         try:
+            log(f"دریافت entity کانال {channel_identifier}...")
             entity = await client.get_entity(channel_identifier)
             chat_id = str(entity.id)
             last_id = last_ids.get(chat_id, 0)
-
+            log(f"entity دریافت شد. chat_id = {chat_id}, last_id = {last_id}")
+            
+            # واکشی پیام‌های جدید
+            log("در حال واکشی پیام‌های جدید...")
+            message_count = 0
             async for msg in client.iter_messages(entity, min_id=last_id, reverse=True, limit=20):
                 if msg.id <= last_id:
                     continue
-
+                message_count += 1
+                log(f"پیام جدید یافت شد: id={msg.id}")
+                
                 raw_text = msg.text or msg.caption or ""
                 cleaned = clean_telegram_mentions(raw_text)
-
+                
+                # ساخت لینک
                 if entity.username:
                     post_link = f"https://t.me/{entity.username}/{msg.id}"
                 else:
                     post_link = f"https://t.me/c/{str(entity.id)[4:]}/{msg.id}"
-
+                
                 footer = f"\n\nمنبع(<a href='{post_link}'>لینک</a>)\n@CX_NEWS | اخبار اقتصادی"
                 final_caption = (cleaned + footer) if cleaned else footer.strip()
-
+                
                 success = False
                 temp_file = None
-
+                
+                # ارسال بر اساس نوع محتوا
                 if msg.photo:
+                    log(f"در حال دانلود عکس پیام {msg.id}...")
                     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                         temp_file = tmp.name
                     await client.download_media(msg.photo, temp_file)
+                    log("عکس دانلود شد. ارسال به بله...")
                     success = send_photo_to_bale(temp_file, final_caption)
                     os.unlink(temp_file)
                 elif msg.video:
+                    log(f"در حال دانلود ویدیو پیام {msg.id}...")
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                         temp_file = tmp.name
                     await client.download_media(msg.video, temp_file)
+                    log("ویدیو دانلود شد. ارسال به بله...")
                     success = send_video_to_bale(temp_file, final_caption)
                     os.unlink(temp_file)
                 else:
+                    log(f"ارسال متن پیام {msg.id} به بله...")
                     full_text = f"{raw_text}\n\n{footer}" if raw_text else footer
                     success = send_text_to_bale(full_text)
-
+                
                 if success:
-                    print(f"✅ ارسال شد: {post_link}")
+                    log(f"✅ پیام {msg.id} با موفقیت ارسال شد.")
                     new_last_ids[chat_id] = msg.id
                 else:
-                    print(f"❌ ارسال نشد: {post_link}")
-
+                    log(f"❌ ارسال پیام {msg.id} ناموفق بود.", "ERROR")
+                
                 await asyncio.sleep(SLEEP_BETWEEN_MESSAGES)
-
+            
+            if message_count == 0:
+                log(f"کانال {channel_identifier}: پیام جدیدی یافت نشد.")
+            else:
+                log(f"کانال {channel_identifier}: {message_count} پیام جدید پردازش شد.")
+                
         except FloodWaitError as e:
-            print(f"⚠️ محدودیت تلگرام: {e.seconds} ثانیه صبر.")
+            log(f"محدودیت تلگرام: باید {e.seconds} ثانیه صبر کرد.", "WARNING")
             await asyncio.sleep(e.seconds)
+        except RPCError as e:
+            log(f"خطای RPC در کانال {channel_identifier}: {e}", "ERROR")
         except Exception as e:
-            print(f"⚠️ خطا در کانال {channel_identifier}: {e}")
-
+            log(f"خطای غیرمنتظره در کانال {channel_identifier}: {e}", "ERROR")
+            traceback.print_exc()
+    
+    # ذخیره وضعیت نهایی
     state["last_message_ids"] = new_last_ids
     save_state(state)
+    log("وضعیت ذخیره شد.")
+    
     await client.disconnect()
-    print("🏁 پایان اسکریپت.")
+    log("=== پایان اسکریپت ===")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log("اسکریپت توسط کاربر متوقف شد.", "WARNING")
+    except Exception as e:
+        log(f"خطای سطح بالا: {e}", "ERROR")
+        traceback.print_exc()
