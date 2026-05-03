@@ -3,20 +3,22 @@ import json
 import os
 import re
 import tempfile
+import base64
 from datetime import datetime
 
 import requests
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 # ======================== خواندن تنظیمات از environment variables ========================
-STRING_SESSION = os.environ.get("STRING_SESSION", "").strip()
+# اطلاعات فایل session (base64)
+SESSION_BASE64 = os.environ.get("SESSION_BASE64", "").strip()
+# اطلاعات API
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "").strip()
 
-# لیست کانال‌های مبدأ (به صورت JSON آرایه‌ای از رشته‌ها)
+# لیست کانال‌های مبدأ (JSON array)
 SOURCE_CHANNELS_JSON = os.environ.get("SOURCE_CHANNELS", "[]")
 try:
     SOURCE_CHANNELS = json.loads(SOURCE_CHANNELS_JSON)
@@ -30,28 +32,21 @@ BALE_CHANNEL_ID = int(os.environ.get("BALE_CHANNEL_ID", 0))
 
 # فایل ذخیره آخرین شناسه پیام‌های پردازش شده
 STATE_FILE = "state.json"
-
-# تأخیر بین ارسال پیام‌ها به بله (برای جلوگیری از محدودیت نرخ)
 SLEEP_BETWEEN_MESSAGES = 1  # ثانیه
 
 # ====================================================================
 
 def clean_telegram_mentions(text: str) -> str:
-    """حذف شناسه‌های تلگرامی (@username، لینک‌های t.me، شناسه‌های عددی) از متن"""
+    """حذف شناسه‌های تلگرامی (@username، لینک‌های t.me، شناسه‌های عددی)"""
     if not text:
         return ""
-    # حذف @username
     text = re.sub(r'@[\w_]+', '', text)
-    # حذف لینک‌های t.me
     text = re.sub(r'https?://t\.me/\S+', '', text)
-    # حذف شناسه‌های عددی داخل کروشه یا بدون آن (مثلاً [123456] یا 123456 به تنهایی؟ فقط کروشه‌دار برای احتیاط)
     text = re.sub(r'\[\d+\]', '', text)
-    # حذف فاصله‌های اضافی
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def send_text_to_bale(text: str) -> bool:
-    """ارسال متن ساده به کانال بله (با قالب HTML)"""
     url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": BALE_CHANNEL_ID,
@@ -60,22 +55,16 @@ def send_text_to_bale(text: str) -> bool:
     }
     try:
         resp = requests.post(url, json=payload, timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("ok"):
-                return True
-            else:
-                print(f"⚠️ خطا از سمت بله (sendMessage): {data}")
-                return False
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
         else:
-            print(f"⚠️ خطای HTTP {resp.status_code}: {resp.text}")
+            print(f"⚠️ خطا در sendMessage: {resp.text}")
             return False
     except Exception as e:
-        print(f"⚠️ خطا در ارسال متن به بله: {e}")
+        print(f"⚠️ خطا در ارسال متن: {e}")
         return False
 
 def send_photo_to_bale(photo_path: str, caption: str = "") -> bool:
-    """ارسال عکس به کانال بله همراه با کپشن"""
     url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendPhoto"
     try:
         with open(photo_path, 'rb') as f:
@@ -92,7 +81,6 @@ def send_photo_to_bale(photo_path: str, caption: str = "") -> bool:
         return False
 
 def send_video_to_bale(video_path: str, caption: str = "") -> bool:
-    """ارسال ویدیو به کانال بله همراه با کپشن"""
     url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendVideo"
     try:
         with open(video_path, 'rb') as f:
@@ -109,7 +97,6 @@ def send_video_to_bale(video_path: str, caption: str = "") -> bool:
         return False
 
 def load_state() -> dict:
-    """بارگذاری آخرین شناسه پیام‌های پردازش شده"""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -119,14 +106,16 @@ def load_state() -> dict:
     return {"last_message_ids": {}}
 
 def save_state(state: dict):
-    """ذخیره وضعیت"""
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
 async def main():
-    # بررسی وجود تنظیمات ضروری
-    if not STRING_SESSION or not API_ID or not API_HASH:
-        print("❌ STRING_SESSION، API_ID یا API_HASH تنظیم نشده است.")
+    # اعتبارسنجی اولیه
+    if not SESSION_BASE64:
+        print("❌ SESSION_BASE64 تنظیم نشده است.")
+        return
+    if not API_ID or not API_HASH:
+        print("❌ API_ID یا API_HASH تنظیم نشده است.")
         return
     if not BALE_BOT_TOKEN or not BALE_CHANNEL_ID:
         print("❌ BALE_BOT_TOKEN یا BALE_CHANNEL_ID تنظیم نشده است.")
@@ -135,15 +124,22 @@ async def main():
         print("⚠️ هیچ کانال منبعی تعریف نشده است.")
         return
 
-    # اتصال به تلگرام با StringSession
-    client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+    # بازسازی فایل session از base64
+    session_bytes = base64.b64decode(SESSION_BASE64)
+    session_file = "temp_session.session"
+    with open(session_file, "wb") as f:
+        f.write(session_bytes)
+    
+    # اتصال به تلگرام
+    client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
-
+    
     if not await client.is_user_authorized():
-        print("❌ StringSession معتبر نیست. لطفاً یک جلسه جدید ایجاد کنید.")
+        print("❌ فایل session معتبر نیست. لطفاً دوباره آن را بسازید.")
         await client.disconnect()
+        os.remove(session_file)
         return
-
+    
     print("✅ اتصال به تلگرام برقرار شد.")
 
     state = load_state()
@@ -156,37 +152,33 @@ async def main():
             chat_id = str(entity.id)
             last_id = last_ids.get(chat_id, 0)
 
-            # واکشی پیام‌های جدید (حداکثر 20 عدد)
             async for msg in client.iter_messages(entity, min_id=last_id, reverse=True, limit=20):
                 if msg.id <= last_id:
                     continue
 
-                # استخراج متن یا کپشن
                 raw_text = msg.text or msg.caption or ""
                 cleaned_caption = clean_telegram_mentions(raw_text)
 
-                # ساخت لینک پست در تلگرام
+                # ساخت لینک پست
                 if entity.username:
                     post_link = f"https://t.me/{entity.username}/{msg.id}"
                 else:
-                    # برای کانال‌های بدون یوزرنیم (معمولاً id منفی است)
-                    post_link = f"https://t.me/c/{str(entity.id)[4:]}/{msg.id}"  # حذف -100
+                    # برای کانال‌های بدون یوزرنیم (معمولاً id منفی با -100)
+                    post_link = f"https://t.me/c/{str(entity.id)[4:]}/{msg.id}"
 
-                # قالب نهایی پیام (برای متن یا کپشن)
-                footer = "\n\nمنبع(<a href='{}'>لینک</a>)\n@CX_NEWS | اخبار اقتصادی".format(post_link)
+                footer = f"\n\nمنبع(<a href='{post_link}'>لینک</a>)\n@CX_NEWS | اخبار اقتصادی"
                 final_caption = (cleaned_caption + footer) if cleaned_caption else footer.strip()
 
-                # ارسال بر اساس نوع رسانه
                 success = False
                 temp_file = None
 
+                # تشخیص نوع رسانه
                 if msg.photo:
-                    # دانلود عکس در فایل موقت
                     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                         temp_file = tmp.name
                     await client.download_media(msg.photo, temp_file)
                     success = send_photo_to_bale(temp_file, final_caption)
-                    os.unlink(temp_file)  # حذف فایل موقت
+                    os.unlink(temp_file)
                 elif msg.video:
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                         temp_file = tmp.name
@@ -194,7 +186,7 @@ async def main():
                     success = send_video_to_bale(temp_file, final_caption)
                     os.unlink(temp_file)
                 else:
-                    # پیام متنی ساده
+                    # متن ساده
                     full_text = f"{raw_text}\n\n{footer}" if raw_text else footer
                     success = send_text_to_bale(full_text)
 
@@ -204,21 +196,23 @@ async def main():
                 else:
                     print(f"❌ ارسال نشد: {post_link}")
 
-                # تأخیر بین پیام‌ها
                 await asyncio.sleep(SLEEP_BETWEEN_MESSAGES)
 
         except FloodWaitError as e:
-            print(f"⚠️ محدودیت تلگرام: باید {e.seconds} ثانیه صبر کرد.")
+            print(f"⚠️ محدودیت تلگرام: {e.seconds} ثانیه صبر کنید.")
             await asyncio.sleep(e.seconds)
         except Exception as e:
-            print(f"⚠️ خطا در پردازش کانال {channel_identifier}: {e}")
+            print(f"⚠️ خطا در کانال {channel_identifier}: {e}")
 
-    # ذخیره وضعیت جدید
+    # ذخیره وضعیت
     state["last_message_ids"] = new_last_ids
     save_state(state)
 
     await client.disconnect()
-    print("🏁 اسکریپت با موفقیت پایان یافت.")
+    # پاک کردن فایل session موقت
+    if os.path.exists(session_file):
+        os.remove(session_file)
+    print("🏁 پایان اسکریپت.")
 
 if __name__ == "__main__":
     asyncio.run(main())
