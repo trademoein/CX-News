@@ -1,17 +1,15 @@
-name: Send Telegram Posts to Bale
+name: Forward Telegram to Bale
 
 on:
   schedule:
-    # هر 10 دقیقه یکبار (ساعت 0،10،20،30،40،50)
-    - cron: '*/10 * * * *'
-  workflow_dispatch:  # برای اجرای دستی از دکمه
+    - cron: '*/10 * * * *'   # هر 10 دقیقه
+  workflow_dispatch:
 
 jobs:
   forward:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -30,13 +28,10 @@ jobs:
 
       - name: Run bot
         env:
-          # توصیه می‌شود این مقادیر را در GitHub Secrets قرار دهید
+          STRING_SESSION: ${{ secrets.STRING_SESSION }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
-          DC_ID: ${{ secrets.DC_ID }}
-          AUTH_KEY_HEX: ${{ secrets.AUTH_KEY_HEX }}
-          USER_ID: ${{ secrets.USER_ID }}
+          SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHANNEL_ID: ${{ secrets.BALE_CHANNEL_ID }}
-          SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}  # می‌توانید به صورت JSON بدهید
         run: python main.py
