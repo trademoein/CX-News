@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ربات انتقال تلگرام به بله – نسخه حرفه‌ای
-ویژگی‌ها: Dead Letter Queue، پنل مدیریت با ربات بله، ذخیره state محلی
+ربات انتقال تلگرام به بله – نسخه نهایی بدون خطا
 """
 
 import asyncio
@@ -164,7 +163,7 @@ class BaleClient:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                resp = requests.post(url, json=payload, timeout=10)
+                resp = requests.post(url, json=payload, timeout=15)
                 if resp.status_code == 200 and resp.json().get("ok"):
                     return True
             except Exception:
@@ -203,7 +202,7 @@ class BaleClient:
         url = self.base_url + "getUpdates"
         params = {"offset": self.last_update_id + 1, "timeout": 2, "limit": 10}
         try:
-            resp = requests.get(url, params=params, timeout=5)
+            resp = requests.get(url, params=params, timeout=15)
             if resp.status_code != 200:
                 return
             result = resp.json()
