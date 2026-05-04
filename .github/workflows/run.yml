@@ -28,11 +28,9 @@ jobs:
       - name: Install dependencies
         run: pip install telethon requests
 
-      - name: Restore state from git branch (without switching branch)
+      - name: Restore state from git branch (without switching)
         run: |
-          # دریافت آخرین تغییرات شاخه state
           git fetch origin state:state || true
-          # اگر فایل state.json در شاخه state وجود دارد، آن را در ریشه پروژه ذخیره کن
           if git rev-parse --verify refs/heads/state >/dev/null 2>&1; then
             git show state:state.json > state.json 2>/dev/null || echo "{}" > state.json
           else
@@ -56,12 +54,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # برو به شاخه state
+          # ذخیره state.json به‌روز شده در یک مکان موقت
+          cp state.json /tmp/updated_state.json
+          # حذف فایل state.json برای جلوگیری از تداخل هنگام checkout
+          rm -f state.json
+          # رفتن به شاخه state (ایجاد اگر نباشد)
           git checkout state || git checkout -b state
-          # فایل state.json را از شاخه اصلی (قبلی) به اینجا بیاور
-          cp "$GITHUB_WORKSPACE/state.json" .
+          # برگرداندن فایل به‌روز شده
+          cp /tmp/updated_state.json state.json
           git add state.json
           git commit -m "Update state [skip ci]" || echo "No changes to commit"
           git push origin state
-          # برگرد به شاخه اصلی برای اجراهای بعدی (اختیاری)
+          # برگشت به شاخه اصلی (برای اجراهای بعدی)
           git checkout main
