@@ -2,15 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 ربات انتقال تلگرام به بله – نسخه حرفه‌ای
-ویژگی‌ها: Dead Letter Queue، پنل مدیریت با ربات بله، ذخیره state روی شاخه git
+ویژگی‌ها: Dead Letter Queue، پنل مدیریت با ربات بله، ذخیره state محلی
 """
 
 import asyncio
 import json
 import os
 import re
-import subprocess
-import sys
 import tempfile
 import traceback
 from contextlib import suppress
@@ -46,18 +44,15 @@ except Exception:
 BALE_BOT_TOKEN = os.environ.get("BALE_BOT_TOKEN", "").strip()
 BALE_CHANNEL_ID = int(os.environ.get("BALE_CHANNEL_ID", 0))
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
-STATE_BRANCH = "state"
-
 SLEEP_BETWEEN_MESSAGES = 1.5
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-# ================================ مدیریت state با پشتیبانی از گیت ================================
-class GitStateManager:
-    def __init__(self, state_file: str = "state.json"):
-        self.state_file = state_file
+STATE_FILE = "state.json"
+
+# ================================ مدیریت state محلی ================================
+class StateManager:
+    def __init__(self):
         self.data = {
             "last_message_ids": {},
             "dead_letter": [],
@@ -70,52 +65,19 @@ class GitStateManager:
         self.load()
 
     def load(self):
-        if not os.path.exists(self.state_file):
+        if not os.path.exists(STATE_FILE):
             self.save()
             return
         try:
-            with open(self.state_file, "r") as f:
+            with open(STATE_FILE, "r") as f:
                 loaded = json.load(f)
                 self.data.update(loaded)
         except Exception as e:
             log(f"خطا در بارگذاری state: {e}", "ERROR")
 
     def save(self):
-        with open(self.state_file, "w") as f:
+        with open(STATE_FILE, "w") as f:
             json.dump(self.data, f, indent=2, ensure_ascii=False)
-
-    def commit_to_git(self):
-        if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-            log("GITHUB_TOKEN تنظیم نشده – state فقط محلی ذخیره شد", "WARNING")
-            return
-        self.save()
-        repo_url = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{GITHUB_REPOSITORY}.git"
-        try:
-            subprocess.run(["git", "config", "user.name", "github-actions"], check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "actions@github.com"], check=True, capture_output=True)
-
-            # بررسی وجود شاخه state
-            result = subprocess.run(["git", "ls-remote", "--heads", repo_url, STATE_BRANCH], capture_output=True, text=True)
-            if not result.stdout.strip():
-                subprocess.run(["git", "checkout", "--orphan", STATE_BRANCH], check=True, capture_output=True)
-                subprocess.run(["git", "rm", "-rf", "."], check=True, capture_output=True)
-            else:
-                subprocess.run(["git", "fetch", repo_url, STATE_BRANCH], check=True, capture_output=True)
-                subprocess.run(["git", "checkout", STATE_BRANCH], check=True, capture_output=True)
-
-            # افزودن فایل state.json (بدون cp اضافی)
-            if not os.path.exists(self.state_file):
-                with open(self.state_file, "w") as f:
-                    json.dump({}, f)
-            subprocess.run(["git", "add", self.state_file], check=True, capture_output=True)
-            commit_result = subprocess.run(["git", "commit", "-m", f"Update state {datetime.now().isoformat()}"], capture_output=True)
-            if commit_result.returncode == 0:
-                subprocess.run(["git", "push", repo_url, f"HEAD:{STATE_BRANCH}"], check=True, capture_output=True)
-                log("State با موفقیت به گیت ارسال شد", "INFO")
-            else:
-                log("تغییری در state وجود ندارد", "DEBUG")
-        except Exception as e:
-            log(f"خطا در commit state به گیت: {e}", "ERROR")
 
     def get_last_id(self, channel: str) -> int:
         return self.data["last_message_ids"].get(channel, 0)
@@ -185,7 +147,7 @@ def build_footer(post_link: str) -> str:
 
 # ================================ کلاس ارتباط با بله ================================
 class BaleClient:
-    def __init__(self, token: str, state_manager: GitStateManager):
+    def __init__(self, token: str, state_manager: StateManager):
         self.token = token
         self.base_url = f"https://tapi.bale.ai/bot{token}/"
         self.state = state_manager
@@ -300,7 +262,7 @@ class BaleClient:
 
 # ================================ ربات اصلی ================================
 class TelegramToBaleBot:
-    def __init__(self, state_manager: GitStateManager, bale_client: BaleClient):
+    def __init__(self, state_manager: StateManager, bale_client: BaleClient):
         self.state = state_manager
         self.bale = bale_client
         self.client: Optional[TelegramClient] = None
@@ -527,11 +489,10 @@ async def main():
         log("هیچ کانال منبعی تعریف نشده", "WARNING")
         return
 
-    state = GitStateManager()
+    state = StateManager()
     bale = BaleClient(BALE_BOT_TOKEN, state)
     bot = TelegramToBaleBot(state, bale)
     await bot.run()
-    state.commit_to_git()
 
 if __name__ == "__main__":
     try:
