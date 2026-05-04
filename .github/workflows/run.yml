@@ -2,23 +2,23 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # هر 5 دقیقه
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
   group: forward-bot
-  cancel-in-progress: false   # اجازه ندهید اجرای جدید، قبلی را متوقف کند
+  cancel-in-progress: false
 
 jobs:
   forward:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # برای commit state روی شاخه state
+      contents: write
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # برای دسترسی به تمام شاخه‌ها
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -31,14 +31,16 @@ jobs:
       - name: Restore state from git branch
         run: |
           git fetch origin state:state || true
-          git checkout state || git checkout --orphan state
-          # اگر state.json وجود دارد، آن را به پوشه اصلی بیاور
-          if [ -f state.json ]; then
-            cp state.json ./
+          if git show-ref --verify refs/heads/state; then
+            git checkout state
           else
+            git checkout -b state
+          fi
+          # اگر state.json وجود دارد آن را نگه دار، در غیر این صورت یک فایل خالی بساز
+          if [ ! -f state.json ]; then
             echo "{}" > state.json
           fi
-          git checkout main   # برگرد به شاخه اصلی برای اجرای کد
+          git checkout main
 
       - name: Run bot
         env:
@@ -55,12 +57,13 @@ jobs:
         run: python main.py
 
       - name: Commit updated state
-        if: always()   # حتی اگر خطا داشت، state ذخیره شود
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout state || git checkout --orphan state
-          cp state.json .
+          git fetch origin state:state || true
+          git checkout state
+          cp ../state.json . 2>/dev/null || true
           git add state.json
           git commit -m "Update state [skip ci]" || echo "No changes to commit"
           git push origin state
