@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ربات انتقال تلگرام به بله – نسخه نهایی با رفع مشکل لینک (پشتیبانی از سه روش ارسال)
+ربات انتقال تلگرام به بله – نسخه نهایی با لینک‌های HTML
 """
 
 import asyncio
@@ -122,7 +122,7 @@ class FixedIpSession(MemorySession):
             raise ValueError(f"DC_ID {dc_id} پشتیبانی نمی‌شود (فقط 1-5)")
         server_address, port = servers[dc_id]
         self._dc_id = dc_id
-        self._server_address = server_address
+        self._server_address =server_address
         self._port = port
         auth_key_bytes = bytes.fromhex(auth_key_hex)
         self._auth_key = AuthKey(data=auth_key_bytes)
@@ -144,7 +144,7 @@ def clean_lines_with_mentions(text: str) -> str:
 def build_footer(post_link: str) -> str:
     return f"\n\n<a href='{post_link}'>منبع</a>\n@CX_NEWS | اخبار اقتصادی"
 
-# ================================ کلاس ارتباط با بله ================================
+# ================================ کلاس ارتباط با بله (اصلاح شده) ================================
 class BaleClient:
     def __init__(self, token: str, state_manager: StateManager):
         self.token = token
@@ -157,23 +157,31 @@ class BaleClient:
         self.state.save()
 
     def send_message(self, chat_id: int, text: str) -> bool:
+        """ارسال پیام متنی با پشتیبانی از HTML"""
         if not self.token:
             return False
         url = self.base_url + "sendMessage"
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"  # فعال‌سازی لینک‌های HTML - کلید حل مشکل
+        }
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = requests.post(url, json=payload, timeout=15)
                 if resp.status_code == 200 and resp.json().get("ok"):
                     return True
-            except Exception:
-                pass
+                else:
+                    log(f"خطا در ارسال پیام (کد {resp.status_code}): {resp.text}", "ERROR")
+            except Exception as e:
+                log(f"خطا در ارسال پیام: {e}", "ERROR")
             if attempt < MAX_RETRIES:
                 import time
                 time.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         return False
 
     def send_media(self, chat_id: int, caption: str, file_path: str, media_type: str) -> bool:
+        """ارسال رسانه (عکس، ویدئو و ...) با پشتیبانی از HTML در کپشن"""
         method_map = {
             "photo": "sendPhoto", "video": "sendVideo", "voice": "sendVoice",
             "audio": "sendAudio", "sticker": "sendSticker",
@@ -186,79 +194,16 @@ class BaleClient:
         data = {"chat_id": chat_id}
         if media_type != "sticker":
             data["caption"] = caption
-            data["parse_mode"] = "HTML"
+            data["parse_mode"] = "HTML"  # فعال‌سازی لینک‌های HTML در کپشن
         files = {media_type: open(file_path, "rb")}
         try:
             resp = requests.post(url, data=data, files=files, timeout=60)
             return resp.status_code == 200 and resp.json().get("ok")
-        except Exception:
+        except Exception as e:
+            log(f"خطا در ارسال رسانه: {e}", "ERROR")
             return False
         finally:
             files[media_type].close()
-
-    # ================== روش‌های جایگزین و قدرتمند ارسال لینک ==================
-    async def send_to_bale_with_fallback(self, chat_id: int, caption: str, file_path: Optional[str] = None, media_type: str = "") -> bool:
-        """
-        ارسال پیام به بله با ۳ روش پشتیبان برای لینک‌ها (HTML، Markdown و Rendered Text)
-        """
-        # --- روش اول: ارسال HTML با disable_web_page_preview (پیشنهادی) ---
-        url = self.base_url + "sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": caption,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True  # غیرفعال کردن پیش‌نمایش خودکار لینک
-        }
-        try:
-            resp = requests.post(url, json=payload, timeout=30)
-            if resp.status_code == 200 and resp.json().get("ok"):
-                log("✅ پیام با موفقیت (با disable_web_page_preview) ارسال شد.", "DEBUG")
-                return True
-        except Exception as e:
-            log(f"خطا در ارسال HTML (با پیش‌نمایش): {e}", "DEBUG")
-
-        # --- روش دوم: ارسال با استفاده از Markdown (در صورت ناسازگاری کامل HTML) ---
-        markdown_caption = self._html_to_markdown(caption)  # تبدیل HTML به Markdown
-        payload["parse_mode"] = "Markdown"
-        payload["text"] = markdown_caption
-        try:
-            resp = requests.post(url, json=payload, timeout=30)
-            if resp.status_code == 200 and resp.json().get("ok"):
-                log("✅ پیام با موفقیت (با Markdown) ارسال شد.", "DEBUG")
-                return True
-        except Exception as e:
-            log(f"خطا در ارسال Markdown: {e}", "DEBUG")
-
-        # --- روش سوم: ارسال متن ساده Rendered با توضیح لینک در فوتر (آخرین راه) ---
-        # ساخت لینک به صورت رندر شده: متن + [لینک]
-        rendered_caption = caption.replace(f'<a href="{self._extract_link(caption)}">منبع</a>', f'[منبع]({self._extract_link(caption)})')
-        payload["parse_mode"] = None  # حذف parse_mode
-        payload["text"] = rendered_caption
-        try:
-            resp = requests.post(url, json=payload, timeout=30)
-            if resp.status_code == 200 and resp.json().get("ok"):
-                log("✅ پیام با موفقیت (با متن رندر شده) ارسال شد.", "DEBUG")
-                return True
-        except Exception as e:
-            log(f"خطا در ارسال متن رندر شده: {e}", "DEBUG")
-
-        return False  # اگر همه روش‌ها ناموفق بودند
-
-    # تابع کمکی برای تبدیل HTML به Markdown
-    def _html_to_markdown(self, html_text: str) -> str:
-        """تبدیل تگ‌های HTML ساده به فرمت Markdown"""
-        # تبدیل لینک‌ها: [متن](لینک)
-        markdown_text = re.sub(r'<a\s+href="([^"]+)"\s*>(.*?)</a>', r'[\2](\1)', html_text)
-        # تبدیل تگ‌های bold و italic (اختیاری)
-        markdown_text = re.sub(r'<b>(.*?)</b>', r'*\1*', markdown_text)
-        markdown_text = re.sub(r'<i>(.*?)</i>', r'_\1_', markdown_text)
-        return markdown_text
-
-    # تابع کمکی برای استخراج لینک از متن HTML
-    def _extract_link(self, html_text: str) -> str:
-        """استخراج آدرس لینک از تگ HTML"""
-        match = re.search(r'<a\s+href="([^"]+)"\s*>', html_text)
-        return match.group(1) if match else ""
 
     def process_admin_commands(self):
         if not self.token:
@@ -392,8 +337,7 @@ class TelegramToBaleBot:
         if file_path and media_type:
             return self.bale.send_media(chat_id, caption, file_path, media_type)
         else:
-            # استفاده از روش جدید با fallback برای لینک‌ها
-            return await self.bale.send_to_bale_with_fallback(chat_id, caption)
+            return self.bale.send_message(chat_id, caption)
 
     async def process_message(self, msg: Message, channel_entity, channel_key: str) -> bool:
         raw_text = msg.text or msg.caption or ""
@@ -403,7 +347,7 @@ class TelegramToBaleBot:
             post_link = f"https://t.me/{channel_entity.username}/{msg.id}"
         else:
             post_link = f"https://t.me/c/{str(channel_entity.id)[4:]}/{msg.id}"
-        footer = build_footer(post_link)
+        footer = build_footer(post_link)  # اینجا تگ <a> ساخته می‌شود
         final_caption = (cleaned_text + footer) if cleaned_text else footer
 
         media_type = None
