@@ -2,29 +2,43 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # هر 5 دقیقه (حداقل مجاز)
+    - cron: '*/5 * * * *'   # هر 5 دقیقه
   workflow_dispatch:
+
+concurrency:
+  group: forward-bot
+  cancel-in-progress: false   # اجازه ندهید اجرای جدید، قبلی را متوقف کند
 
 jobs:
   forward:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # برای commit state روی شاخه state
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # برای دسترسی به تمام شاخه‌ها
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Cache state file
-        uses: actions/cache@v3
-        with:
-          path: state.json
-          key: state-${{ github.run_id }}
-          restore-keys: state-
-
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install telethon requests
+
+      - name: Restore state from git branch
+        run: |
+          git fetch origin state:state || true
+          git checkout state || git checkout --orphan state
+          # اگر state.json وجود دارد، آن را به پوشه اصلی بیاور
+          if [ -f state.json ]; then
+            cp state.json ./
+          else
+            echo "{}" > state.json
+          fi
+          git checkout main   # برگرد به شاخه اصلی برای اجرای کد
 
       - name: Run bot
         env:
@@ -36,4 +50,17 @@ jobs:
           SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHANNEL_ID: ${{ secrets.BALE_CHANNEL_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python main.py
+
+      - name: Commit updated state
+        if: always()   # حتی اگر خطا داشت، state ذخیره شود
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout state || git checkout --orphan state
+          cp state.json .
+          git add state.json
+          git commit -m "Update state [skip ci]" || echo "No changes to commit"
+          git push origin state
