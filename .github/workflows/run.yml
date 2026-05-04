@@ -36,9 +36,11 @@ jobs:
           else
             git checkout -b state
           fi
-          # اگر state.json وجود دارد آن را نگه دار، در غیر این صورت یک فایل خالی بساز
-          if [ ! -f state.json ]; then
-            echo "{}" > state.json
+          # اگر فایل state.json در شاخه state هست، آن را به ریشه پروژه (دایرکتوری اصلی) کپی کن
+          if [ -f state.json ]; then
+            cp state.json $GITHUB_WORKSPACE/state.json
+          else
+            echo "{}" > $GITHUB_WORKSPACE/state.json
           fi
           git checkout main
 
@@ -52,8 +54,6 @@ jobs:
           SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHANNEL_ID: ${{ secrets.BALE_CHANNEL_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python main.py
 
       - name: Commit updated state
@@ -61,9 +61,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # از ریشه پروژه state.json را به شاخه state منتقل کن
           git fetch origin state:state || true
-          git checkout state
-          cp ../state.json . 2>/dev/null || true
+          git checkout state || git checkout -b state
+          cp $GITHUB_WORKSPACE/state.json .
           git add state.json
           git commit -m "Update state [skip ci]" || echo "No changes to commit"
           git push origin state
