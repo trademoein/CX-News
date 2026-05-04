@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ربات انتقال تلگرام به بله – نسخه نهایی با لینک‌های HTML
+ربات انتقال تلگرام به بله – نسخه پایدار (رفع خطای caption)
 """
 
 import asyncio
@@ -122,7 +122,7 @@ class FixedIpSession(MemorySession):
             raise ValueError(f"DC_ID {dc_id} پشتیبانی نمی‌شود (فقط 1-5)")
         server_address, port = servers[dc_id]
         self._dc_id = dc_id
-        self._server_address =server_address
+        self._server_address = server_address
         self._port = port
         auth_key_bytes = bytes.fromhex(auth_key_hex)
         self._auth_key = AuthKey(data=auth_key_bytes)
@@ -144,7 +144,7 @@ def clean_lines_with_mentions(text: str) -> str:
 def build_footer(post_link: str) -> str:
     return f"\n\n<a href='{post_link}'>منبع</a>\n@CX_NEWS | اخبار اقتصادی"
 
-# ================================ کلاس ارتباط با بله (اصلاح شده) ================================
+# ================================ کلاس ارتباط با بله ================================
 class BaleClient:
     def __init__(self, token: str, state_manager: StateManager):
         self.token = token
@@ -157,31 +157,27 @@ class BaleClient:
         self.state.save()
 
     def send_message(self, chat_id: int, text: str) -> bool:
-        """ارسال پیام متنی با پشتیبانی از HTML"""
         if not self.token:
             return False
         url = self.base_url + "sendMessage"
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "HTML"  # فعال‌سازی لینک‌های HTML - کلید حل مشکل
+            "parse_mode": "HTML"
         }
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = requests.post(url, json=payload, timeout=15)
                 if resp.status_code == 200 and resp.json().get("ok"):
                     return True
-                else:
-                    log(f"خطا در ارسال پیام (کد {resp.status_code}): {resp.text}", "ERROR")
-            except Exception as e:
-                log(f"خطا در ارسال پیام: {e}", "ERROR")
+            except Exception:
+                pass
             if attempt < MAX_RETRIES:
                 import time
                 time.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         return False
 
     def send_media(self, chat_id: int, caption: str, file_path: str, media_type: str) -> bool:
-        """ارسال رسانه (عکس، ویدئو و ...) با پشتیبانی از HTML در کپشن"""
         method_map = {
             "photo": "sendPhoto", "video": "sendVideo", "voice": "sendVoice",
             "audio": "sendAudio", "sticker": "sendSticker",
@@ -194,13 +190,12 @@ class BaleClient:
         data = {"chat_id": chat_id}
         if media_type != "sticker":
             data["caption"] = caption
-            data["parse_mode"] = "HTML"  # فعال‌سازی لینک‌های HTML در کپشن
+            data["parse_mode"] = "HTML"
         files = {media_type: open(file_path, "rb")}
         try:
             resp = requests.post(url, data=data, files=files, timeout=60)
             return resp.status_code == 200 and resp.json().get("ok")
-        except Exception as e:
-            log(f"خطا در ارسال رسانه: {e}", "ERROR")
+        except Exception:
             return False
         finally:
             files[media_type].close()
@@ -340,14 +335,15 @@ class TelegramToBaleBot:
             return self.bale.send_message(chat_id, caption)
 
     async def process_message(self, msg: Message, channel_entity, channel_key: str) -> bool:
-        raw_text = msg.text or msg.caption or ""
+        # اصلاح: استفاده از msg.text به جای msg.caption
+        raw_text = msg.text or ""
         cleaned_text = clean_lines_with_mentions(raw_text)
 
         if hasattr(channel_entity, 'username') and channel_entity.username:
             post_link = f"https://t.me/{channel_entity.username}/{msg.id}"
         else:
             post_link = f"https://t.me/c/{str(channel_entity.id)[4:]}/{msg.id}"
-        footer = build_footer(post_link)  # اینجا تگ <a> ساخته می‌شود
+        footer = build_footer(post_link)
         final_caption = (cleaned_text + footer) if cleaned_text else footer
 
         media_type = None
@@ -409,11 +405,12 @@ class TelegramToBaleBot:
                     self.state.set_last_id(key, msg.id)
                     continue
 
+                # بررسی وجود رسانه یا متن (با استفاده از msg.text)
                 has_media = any([
                     msg.photo, msg.video, msg.voice, msg.audio, msg.sticker,
                     getattr(msg, 'animation', None), msg.document
                 ])
-                text_content = (msg.text or msg.caption or "").strip()
+                text_content = (msg.text or "").strip()
                 if not text_content and not has_media:
                     log(f"پیام کاملاً خالی id={msg.id}", "DEBUG")
                     self.state.set_last_id(key, msg.id)
