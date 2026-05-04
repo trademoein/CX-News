@@ -2,7 +2,7 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/13 * * * *'   # اجرا هر ۱۳ دقیقه (کاهش شانس تاخیر)
+    - cron: '*/6 * * * *'   # اجرا هر ۱۳ دقیقه (کاهش شانس تاخیر)
   workflow_dispatch:
 
 concurrency:
