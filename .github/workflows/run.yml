@@ -2,12 +2,12 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/13 * * * *'   # اجرا هر ۱۳ دقیقه (کاهش شانس تاخیر)
   workflow_dispatch:
 
 concurrency:
   group: forward-bot
-  cancel-in-progress: false
+  cancel-in-progress: true   # اجرای جدید، اجرای قبلی را لغو می‌کند
 
 jobs:
   forward:
