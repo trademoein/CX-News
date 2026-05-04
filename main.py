@@ -38,13 +38,12 @@ BALE_BOT_TOKEN = os.environ.get("BALE_BOT_TOKEN", "").strip()
 BALE_CHANNEL_ID = int(os.environ.get("BALE_CHANNEL_ID", 0))
 
 STATE_FILE = "state.json"
-SLEEP_BETWEEN_MESSAGES = 1.5          # ثانیه
+SLEEP_BETWEEN_MESSAGES = 1.5
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 # ================================ کلاس سشن با IP ثابت ================================
 class FixedIpSession(MemorySession):
-    """نشستی که آدرس IP سرور را بر اساس DC ID مستقیم ست می‌کند (بدون DNS)"""
     def __init__(self, dc_id: int, auth_key_hex: str, user_id: Optional[int] = None):
         super().__init__()
         servers = {
@@ -68,7 +67,6 @@ class FixedIpSession(MemorySession):
 
 # ================================ توابع کمکی ================================
 def clean_lines_with_mentions(text: str) -> str:
-    """حذف خطوطی که شامل @username, t.me link, یا عدد بلند (شناسه) هستند"""
     if not text:
         return ""
     lines = text.split('\n')
@@ -91,15 +89,13 @@ def save_state(state: Dict) -> None:
     temp_file = STATE_FILE + ".tmp"
     with open(temp_file, "w") as f:
         json.dump(state, f, indent=2)
-    os.replace(temp_file, STATE_FILE)  # atomic save
+    os.replace(temp_file, STATE_FILE)
 
-# ================================ توابع ارسال به بله با retry ================================
-def send_to_bale_with_retry(chat_id: int, text: str = None, 
+def send_to_bale_with_retry(chat_id: int, text: str = None,
                              photo_path: str = None, video_path: str = None,
                              voice_path: str = None, audio_path: str = None,
                              sticker_path: str = None, animation_path: str = None,
                              document_path: str = None) -> bool:
-    """ارسال انواع رسانه به بله با تلاش مجدد"""
     if not BALE_BOT_TOKEN:
         return False
     url_base = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/"
@@ -133,7 +129,6 @@ def send_to_bale_with_retry(chat_id: int, text: str = None,
         files = {"audio": open(audio_path, "rb")}
     elif sticker_path is not None:
         method = "sendSticker"
-        # استیکر معمولاً کپشن ندارد
         files = {"sticker": open(sticker_path, "rb")}
     elif animation_path is not None:
         method = "sendAnimation"
@@ -156,22 +151,17 @@ def send_to_bale_with_retry(chat_id: int, text: str = None,
                     f.close()
             if resp.status_code == 200 and resp.json().get("ok"):
                 return True
-            else:
-                log(f"خطا در ارسال (تلاش {attempt}): {resp.text[:100]}", "WARNING")
-        except Exception as e:
-            log(f"استثنا در ارسال (تلاش {attempt}): {e}", "WARNING")
-        
+        except Exception:
+            pass
         if attempt < MAX_RETRIES:
             import time
-            delay = RETRY_DELAY * (2 ** (attempt - 1))
-            time.sleep(delay)
+            time.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
     return False
 
 # ================================ تابع اصلی ================================
 async def main():
-    log("=== راه‌اندازی ربات انتقال تلگرام به بله (نسخه کامل) ===")
-    
-    # اعتبارسنجی اولیه
+    log("=== راه‌اندازی ربات انتقال تلگرام به بله (نسخه نهایی) ===")
+
     if not all([API_ID, API_HASH, DC_ID, AUTH_KEY_HEX, USER_ID]):
         log("متغیرهای API_ID, API_HASH, DC_ID, AUTH_KEY_HEX, USER_ID الزامی هستند", "ERROR")
         return
@@ -182,14 +172,12 @@ async def main():
         log("هیچ کانال منبعی تعریف نشده", "WARNING")
         return
 
-    # اتصال به تلگرام
     try:
         session = FixedIpSession(DC_ID, AUTH_KEY_HEX, USER_ID)
         client = TelegramClient(session, API_ID, API_HASH)
         await client.connect()
         if not await client.is_user_authorized():
             log("احراز هویت نشد. اطلاعات نشست معتبر نیست.", "ERROR")
-            await client.disconnect()
             return
         log("✅ اتصال و احراز هویت موفق")
     except Exception as e:
@@ -197,7 +185,6 @@ async def main():
         traceback.print_exc()
         return
 
-    # بارگذاری وضعیت قبلی
     state = load_state()
     last_ids = state.get("last_message_ids", {})
     new_last_ids = last_ids.copy()
@@ -209,7 +196,7 @@ async def main():
             chat_id_str = str(entity.id)
             last_id = last_ids.get(chat_id_str, 0)
 
-            # اولین اجرا: آخرین پیام را ذخیره کن و هیچ ارسالی انجام نده
+            # اولین اجرا: فقط آخرین شناسه را ذخیره کن (هیچ پیامی ارسال نشود)
             if last_id == 0:
                 last_msg = await client.get_messages(entity, limit=1)
                 if last_msg:
@@ -217,27 +204,33 @@ async def main():
                     new_last_ids[chat_id_str] = last_id
                     state["last_message_ids"] = new_last_ids
                     save_state(state)
-                    log(f"اولین اجرا: آخرین پیام id={last_id} ذخیره شد. پیام جدید بعداً ارسال می‌شود.")
-                continue
+                    log(f"اولین اجرا: آخرین پیام id={last_id} ذخیره شد. از اجرای بعد پیام‌های جدید ارسال می‌شوند.")
+                else:
+                    log(f"کانال {chan} پیامی ندارد.")
+                continue  # مهم: از این کانال خارج شو و هیچ ارسالی انجام نده
 
             # واکشی پیام‌های جدیدتر از last_id
             async for msg in client.iter_messages(entity, min_id=last_id, reverse=True, limit=30):
                 if msg.id <= last_id:
                     continue
 
-                # رد کردن پیام‌های سرویس
                 if isinstance(msg, MessageService):
                     log(f"پیام سرویس id={msg.id} رد شد", "DEBUG")
                     new_last_ids[chat_id_str] = msg.id
                     continue
 
-                # استخراج متن (کپشن)
-                raw_text = msg.text or msg.caption or ""
+                # دریافت متن یا کپشن (بدون خطا)
+                raw_text = ""
+                if hasattr(msg, 'text') and msg.text:
+                    raw_text = msg.text
+                elif hasattr(msg, 'caption') and msg.caption:
+                    raw_text = msg.caption
+
                 cleaned_text = clean_lines_with_mentions(raw_text)
 
-                # اگر هیچ محتوایی باقی نمانده و رسانه هم ندارد
-                if not cleaned_text and not msg.photo and not msg.video and not msg.voice and not msg.audio and not msg.sticker and not msg.animation and not msg.document:
-                    log(f"پیام خالی id={msg.id} (بدون متن و رسانه) – فقط به‌روزرسانی last_id", "DEBUG")
+                # اگر پس از پاکسازی متنی نماند و رسانه هم نداشته باشد
+                if not cleaned_text and not any([msg.photo, msg.video, msg.voice, msg.audio, msg.sticker, msg.animation, msg.document]):
+                    log(f"پیام خالی id={msg.id} – فقط به‌روزرسانی last_id", "DEBUG")
                     new_last_ids[chat_id_str] = msg.id
                     continue
 
@@ -253,7 +246,6 @@ async def main():
                 temp_file = None
 
                 try:
-                    # تشخیص نوع رسانه و ارسال
                     if msg.photo:
                         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                             temp_file = tmp.name
@@ -286,11 +278,10 @@ async def main():
                         with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tmp:
                             temp_file = tmp.name
                         await client.download_media(msg.sticker, temp_file)
-                        # استیکر معمولاً کپشن نمی‌گیرد، فقط خود فایل ارسال می‌شود
                         success = await asyncio.to_thread(
                             send_to_bale_with_retry, BALE_CHANNEL_ID, sticker_path=temp_file
                         )
-                    elif msg.animation:  # GIF
+                    elif msg.animation:
                         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                             temp_file = tmp.name
                         await client.download_media(msg.animation, temp_file)
@@ -319,7 +310,6 @@ async def main():
                 if success:
                     log(f"✅ پیام {msg.id} با موفقیت به بله ارسال شد")
                     new_last_ids[chat_id_str] = msg.id
-                    # ذخیره وضعیت بعد از هر پیام موفق
                     state["last_message_ids"] = new_last_ids
                     save_state(state)
                 else:
@@ -336,7 +326,6 @@ async def main():
             log(f"خطای غیرمنتظره در کانال {chan}: {e}", "ERROR")
             traceback.print_exc()
 
-    # ذخیره نهایی وضعیت (تکمیلی)
     state["last_message_ids"] = new_last_ids
     save_state(state)
     await client.disconnect()
