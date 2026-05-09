@@ -64,7 +64,7 @@
   "stats": {
     "total_sent": 988,
     "total_failed": 11,
-    "last_run": "2026-05-09T23:15:32.857556"
+    "last_run": "2026-05-09T23:20:40.038034"
   },
   "bale_last_update_id": 46,
   "retry_dead_letter": false,
