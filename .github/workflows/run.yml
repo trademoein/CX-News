@@ -2,18 +2,18 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/6 * * * *'   # اجرا هر ۱۳ دقیقه (کاهش شانس تاخیر)
-  workflow_dispatch:
+    - cron: '*/5 * * * *'   # هر 5 دقیقه – GitHub ممکن است با تأخیر اجرا کند
+  workflow_dispatch:         # این خط به شما امکان اجرای دستی از طریق API یا دکمه Actions را می‌دهد
 
 concurrency:
   group: forward-bot
-  cancel-in-progress: true   # اجرای جدید، اجرای قبلی را لغو می‌کند
+  cancel-in-progress: false
 
 jobs:
   forward:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write         # برای commit state.json روی شاخه state
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
