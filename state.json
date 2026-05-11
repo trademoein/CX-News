@@ -143,13 +143,18 @@
       "channel": "@iamusd",
       "msg_id": 68890,
       "added_at": "2026-05-11T11:22:06.694145"
+    },
+    {
+      "channel": "@iamusd",
+      "msg_id": 68890,
+      "added_at": "2026-05-11T11:25:58.675943"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
     "total_sent": 1059,
-    "total_failed": 28,
-    "last_run": "2026-05-11T11:22:08.302126"
+    "total_failed": 29,
+    "last_run": "2026-05-11T11:26:00.347361"
   },
   "bale_last_update_id": 49,
   "retry_dead_letter": false,
