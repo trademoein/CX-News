@@ -1,6 +1,6 @@
 {
   "last_message_ids": {
-    "@iamusd": 69042,
+    "@iamusd": 69044,
     "@UtoFx": 86361
   },
   "dead_letter": [
@@ -448,15 +448,45 @@
       "channel": "@UtoFx",
       "msg_id": 86367,
       "added_at": "2026-05-13T11:50:58.057572"
+    },
+    {
+      "channel": "@iamusd",
+      "msg_id": 69043,
+      "added_at": "2026-05-13T11:55:43.908805"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86362,
+      "added_at": "2026-05-13T11:55:51.209161"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86363,
+      "added_at": "2026-05-13T11:55:54.851765"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86365,
+      "added_at": "2026-05-13T11:55:58.131422"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86366,
+      "added_at": "2026-05-13T11:56:02.914247"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86367,
+      "added_at": "2026-05-13T11:56:06.285664"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
-    "total_sent": 1394,
-    "total_failed": 89,
-    "last_run": "2026-05-13T11:50:59.634428"
+    "total_sent": 1395,
+    "total_failed": 95,
+    "last_run": "2026-05-13T11:56:07.854422"
   },
-  "bale_last_update_id": 377,
+  "bale_last_update_id": 378,
   "retry_dead_letter": false,
   "skip_current_channel": false
 }
