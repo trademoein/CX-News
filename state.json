@@ -478,13 +478,18 @@
       "channel": "@UtoFx",
       "msg_id": 86367,
       "added_at": "2026-05-13T11:56:06.285664"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86370,
+      "added_at": "2026-05-13T12:20:40.020389"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
     "total_sent": 1403,
-    "total_failed": 95,
-    "last_run": "2026-05-13T12:15:43.809057"
+    "total_failed": 96,
+    "last_run": "2026-05-13T12:20:41.556580"
   },
   "bale_last_update_id": 382,
   "retry_dead_letter": false,
