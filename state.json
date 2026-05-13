@@ -1,6 +1,6 @@
 {
   "last_message_ids": {
-    "@iamusd": 69041,
+    "@iamusd": 69042,
     "@UtoFx": 86361
   },
   "dead_letter": [
@@ -373,13 +373,38 @@
       "channel": "@UtoFx",
       "msg_id": 86367,
       "added_at": "2026-05-13T11:36:08.041107"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86362,
+      "added_at": "2026-05-13T11:40:41.536472"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86363,
+      "added_at": "2026-05-13T11:40:45.440549"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86365,
+      "added_at": "2026-05-13T11:40:48.864615"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86366,
+      "added_at": "2026-05-13T11:40:59.383304"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86367,
+      "added_at": "2026-05-13T11:41:03.485296"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
-    "total_sent": 1393,
-    "total_failed": 74,
-    "last_run": "2026-05-13T11:36:09.576696"
+    "total_sent": 1394,
+    "total_failed": 79,
+    "last_run": "2026-05-13T11:41:05.078373"
   },
   "bale_last_update_id": 375,
   "retry_dead_letter": false,
