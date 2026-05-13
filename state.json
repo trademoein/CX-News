@@ -398,15 +398,40 @@
       "channel": "@UtoFx",
       "msg_id": 86367,
       "added_at": "2026-05-13T11:41:03.485296"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86362,
+      "added_at": "2026-05-13T11:45:46.640772"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86363,
+      "added_at": "2026-05-13T11:45:49.992419"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86365,
+      "added_at": "2026-05-13T11:45:53.981227"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86366,
+      "added_at": "2026-05-13T11:45:57.811706"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86367,
+      "added_at": "2026-05-13T11:46:01.262567"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
     "total_sent": 1394,
-    "total_failed": 79,
-    "last_run": "2026-05-13T11:41:05.078373"
+    "total_failed": 84,
+    "last_run": "2026-05-13T11:46:02.813965"
   },
-  "bale_last_update_id": 375,
+  "bale_last_update_id": 376,
   "retry_dead_letter": false,
   "skip_current_channel": false
 }
