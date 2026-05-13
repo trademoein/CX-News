@@ -233,15 +233,25 @@
       "channel": "@UtoFx",
       "msg_id": 86363,
       "added_at": "2026-05-13T10:55:45.364104"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86362,
+      "added_at": "2026-05-13T11:00:50.657539"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 86363,
+      "added_at": "2026-05-13T11:00:54.116675"
     }
   ],
   "admin_id": 1107331427,
   "stats": {
     "total_sent": 1392,
-    "total_failed": 46,
-    "last_run": "2026-05-13T10:55:46.948362"
+    "total_failed": 48,
+    "last_run": "2026-05-13T11:00:55.714535"
   },
-  "bale_last_update_id": 370,
+  "bale_last_update_id": 371,
   "retry_dead_letter": false,
   "skip_current_channel": false
 }
