@@ -559,9 +559,9 @@
   "stats": {
     "total_sent": 1498,
     "total_failed": 110,
-    "last_run": "2026-05-13T19:15:36.461616"
+    "last_run": "2026-05-13T19:20:41.564453"
   },
-  "bale_last_update_id": 492,
+  "bale_last_update_id": 493,
   "retry_dead_letter": false,
   "skip_current_channel": false
 }
