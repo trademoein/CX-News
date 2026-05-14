@@ -2,8 +2,8 @@ name: Forward Telegram to Bale
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # هر 5 دقیقه – GitHub ممکن است با تأخیر اجرا کند
-  workflow_dispatch:         # این خط به شما امکان اجرای دستی از طریق API یا دکمه Actions را می‌دهد
+    - cron: '*/5 * * * *'   # هر 5 دقیقه
+  workflow_dispatch:
 
 concurrency:
   group: forward-bot
@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write         # برای commit state.json روی شاخه state
+
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -26,7 +27,9 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install telethon requests
+        run: |
+          pip install --upgrade pip
+          pip install telethon aiohttp   # ← اضافه کردن aiohttp
 
       - name: Restore state from git branch (without switching)
         run: |
@@ -47,6 +50,7 @@ jobs:
           SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHANNEL_ID: ${{ secrets.BALE_CHANNEL_ID }}
+          ADMIN_TELEGRAM_ID: ${{ secrets.ADMIN_TELEGRAM_ID }}   # اگر اضافه کرده‌اید
         run: python main.py
 
       - name: Commit updated state
@@ -54,16 +58,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # ذخیره state.json به‌روز شده در یک مکان موقت
           cp state.json /tmp/updated_state.json
-          # حذف فایل state.json برای جلوگیری از تداخل هنگام checkout
           rm -f state.json
-          # رفتن به شاخه state (ایجاد اگر نباشد)
           git checkout state || git checkout -b state
-          # برگرداندن فایل به‌روز شده
           cp /tmp/updated_state.json state.json
           git add state.json
           git commit -m "Update state [skip ci]" || echo "No changes to commit"
           git push origin state
-          # برگشت به شاخه اصلی (برای اجراهای بعدی)
           git checkout main
