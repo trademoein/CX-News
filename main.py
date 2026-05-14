@@ -1,51 +1,51 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-ربات انتقال تلگرام به بله – نسخه پایدار (رفع خطای caption)
-"""
-
 import asyncio
+import aiohttp
 import json
+import logging
 import os
 import re
 import tempfile
 import traceback
 from contextlib import suppress
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-import requests
-from telethon import TelegramClient
-from telethon.errors import FloodWaitError, RPCError
+from telethon import TelegramClient, errors
 from telethon.sessions import MemorySession
 from telethon.crypto import AuthKey
 from telethon.tl.types import Message, MessageService
 
-# ================================ لاگینگ ================================
-def log(msg: str, level: str = "INFO") -> None:
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] [{level:5}] {msg}", flush=True)
+# ================================ راه‌اندازی لاگینگ حرفه‌ای ================================
+logging.basicConfig(
+    format="[%(asctime)s] [%(levelname)-5s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+)
+log = logging.getLogger(__name__)
 
 # ================================ متغیرهای محیطی ================================
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "").strip()
 DC_ID = int(os.environ.get("DC_ID", 0))
 AUTH_KEY_HEX = os.environ.get("AUTH_KEY_HEX", "").strip()
-USER_ID = int(os.environ.get("USER_ID", 0))
+USER_ID = int(os.environ.get("USER_ID", 0)) if os.environ.get("USER_ID") else None
 
 SOURCE_CHANNELS_JSON = os.environ.get("SOURCE_CHANNELS", "[]")
 try:
     SOURCE_CHANNELS = json.loads(SOURCE_CHANNELS_JSON)
 except Exception:
     SOURCE_CHANNELS = []
-    log("SOURCE_CHANNELS نامعتبر، از لیست خالی استفاده می‌شود.", "ERROR")
+    log.error("SOURCE_CHANNELS نامعتبر، از لیست خالی استفاده می‌شود.")
 
 BALE_BOT_TOKEN = os.environ.get("BALE_BOT_TOKEN", "").strip()
 BALE_CHANNEL_ID = int(os.environ.get("BALE_CHANNEL_ID", 0))
 
+ADMIN_TELEGRAM_ID = int(os.environ.get("ADMIN_TELEGRAM_ID", 0)) if os.environ.get("ADMIN_TELEGRAM_ID") else None
+
 SLEEP_BETWEEN_MESSAGES = 1.5
 MAX_RETRIES = 3
 RETRY_DELAY = 2
+MAX_CAPTION_LENGTH = 4000   # حداکثر طول مجاز کپشن در بله (کمی کمتر از محدودیت واقعی)
 
 STATE_FILE = "state.json"
 
@@ -55,11 +55,7 @@ class StateManager:
         self.data = {
             "last_message_ids": {},
             "dead_letter": [],
-            "admin_id": None,
             "stats": {"total_sent": 0, "total_failed": 0, "last_run": None},
-            "bale_last_update_id": 0,
-            "retry_dead_letter": False,
-            "skip_current_channel": False,
         }
         self.load()
 
@@ -72,7 +68,7 @@ class StateManager:
                 loaded = json.load(f)
                 self.data.update(loaded)
         except Exception as e:
-            log(f"خطا در بارگذاری state: {e}", "ERROR")
+            log.error(f"خطا در بارگذاری state: {e}")
 
     def save(self):
         with open(STATE_FILE, "w") as f:
@@ -83,6 +79,7 @@ class StateManager:
 
     def set_last_id(self, channel: str, msg_id: int):
         self.data["last_message_ids"][channel] = msg_id
+        self.save()
 
     def add_to_dead_letter(self, channel: str, msg_id: int):
         self.data["dead_letter"].append({"channel": channel, "msg_id": msg_id, "added_at": datetime.now().isoformat()})
@@ -92,22 +89,18 @@ class StateManager:
     def get_dead_letter(self) -> List[Dict]:
         return self.data["dead_letter"]
 
-    def clear_dead_letter(self):
-        self.data["dead_letter"] = []
-        self.save()
-
-    def set_admin_id(self, admin_id: int):
-        self.data["admin_id"] = admin_id
-        self.save()
-
-    def get_admin_id(self) -> Optional[int]:
-        return self.data.get("admin_id")
-
     def inc_sent_count(self):
         self.data["stats"]["total_sent"] += 1
         self.save()
 
-# ================================ کلاس سشن با IP ثابت ================================
+    def set_last_run(self):
+        self.data["stats"]["last_run"] = datetime.now().isoformat()
+        self.save()
+
+    def get_stats(self) -> Dict:
+        return self.data["stats"]
+
+# ================================ سشن با آی‌پی ثابت ================================
 class FixedIpSession(MemorySession):
     def __init__(self, dc_id: int, auth_key_hex: str, user_id: Optional[int] = None):
         super().__init__()
@@ -124,14 +117,14 @@ class FixedIpSession(MemorySession):
         self._dc_id = dc_id
         self._server_address = server_address
         self._port = port
-        auth_key_bytes = bytes.fromhex(auth_key_hex)
-        self._auth_key = AuthKey(data=auth_key_bytes)
+        self._auth_key = AuthKey(data=bytes.fromhex(auth_key_hex))
         if user_id:
             self._user_id = user_id
-        log(f"FixedIpSession: DC={dc_id} → {server_address}:{port}")
+        log.info(f"FixedIpSession: DC={dc_id} → {server_address}:{port}")
 
 # ================================ ابزارهای کمکی ================================
 def clean_lines_with_mentions(text: str) -> str:
+    """حذف خطوط حاوی منشن، لینک تلگرام یا عدد بلند"""
     if not text:
         return ""
     lines = text.split('\n')
@@ -141,43 +134,95 @@ def clean_lines_with_mentions(text: str) -> str:
             new_lines.append(line)
     return '\n'.join(new_lines).strip()
 
-def build_footer(post_link: str) -> str:
-    return f"\n\n<a href='{post_link}'>منبع</a>\n@CX_NEWS | اخبار اقتصادی"
+def split_long_text(text: str, max_len: int = MAX_CAPTION_LENGTH) -> List[str]:
+    """تقسیم متن بلند به چند بخش با حفظ یکپارچگی خطوط"""
+    if len(text) <= max_len:
+        return [text]
+    parts = []
+    lines = text.split('\n')
+    current_part = ""
+    for line in lines:
+        if len(current_part) + len(line) + 1 > max_len:
+            if current_part:
+                parts.append(current_part.strip())
+            current_part = line
+        else:
+            if current_part:
+                current_part += "\n" + line
+            else:
+                current_part = line
+    if current_part:
+        parts.append(current_part.strip())
+    return parts
 
-# ================================ کلاس ارتباط با بله ================================
-class BaleClient:
-    def __init__(self, token: str, state_manager: StateManager):
+def build_footer(post_link: str) -> str:
+    """ساخت فوتر با لینک مارکداون"""
+    return f"\n\n[منبع]({post_link})\n@CX_NEWS | اخبار اقتصادی"
+
+# ================================ کلاینت ناهمگام بله ================================
+class BaleAsyncClient:
+    def __init__(self, token: str):
         self.token = token
         self.base_url = f"https://tapi.bale.ai/bot{token}/"
-        self.state = state_manager
-        self.last_update_id = self.state.data.get("bale_last_update_id", 0)
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    def _save_offset(self):
-        self.state.data["bale_last_update_id"] = self.last_update_id
-        self.state.save()
+    async def __aenter__(self):
+        self._session = aiohttp.ClientSession()
+        return self
 
-    def send_message(self, chat_id: int, text: str) -> bool:
-        if not self.token:
-            return False
-        url = self.base_url + "sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._session:
+            await self._session.close()
+
+    async def _request(self, method: str, payload: Dict, files: Optional[Dict] = None) -> bool:
+        """ارسال درخواست با تلاش مجدد (exponential backoff)"""
+        url = self.base_url + method
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                resp = requests.post(url, json=payload, timeout=15)
-                if resp.status_code == 200 and resp.json().get("ok"):
-                    return True
-            except Exception:
-                pass
+                if files:
+                    data = aiohttp.FormData()
+                    for k, v in payload.items():
+                        data.add_field(k, str(v))
+                    for field, file_path in files.items():
+                        data.add_field(field, open(file_path, "rb"), filename=os.path.basename(file_path))
+                    async with self._session.post(url, data=data, timeout=60) as resp:
+                        if resp.status == 429:
+                            retry_after = int(resp.headers.get("Retry-After", 5))
+                            log.warning(f"محدودیت نرخ بله: {retry_after} ثانیه صبر")
+                            await asyncio.sleep(retry_after)
+                            continue
+                        result = await resp.json()
+                        return result.get("ok", False)
+                else:
+                    async with self._session.post(url, json=payload, timeout=15) as resp:
+                        if resp.status == 429:
+                            retry_after = int(resp.headers.get("Retry-After", 5))
+                            await asyncio.sleep(retry_after)
+                            continue
+                        result = await resp.json()
+                        return result.get("ok", False)
+            except Exception as e:
+                log.warning(f"خطا در تلاش {attempt} برای {method}: {e}")
             if attempt < MAX_RETRIES:
-                import time
-                time.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
+                wait = RETRY_DELAY * (2 ** (attempt - 1))
+                await asyncio.sleep(wait)
         return False
 
-    def send_media(self, chat_id: int, caption: str, file_path: str, media_type: str) -> bool:
+    async def send_message(self, chat_id: int, text: str) -> bool:
+        if not self.token:
+            return False
+        # تقسیم متن بلند به چند پیام
+        parts = split_long_text(text)
+        success = True
+        for part in parts:
+            payload = {"chat_id": chat_id, "text": part, "parse_mode": "Markdown"}
+            ok = await self._request("sendMessage", payload)
+            if not ok:
+                success = False
+            await asyncio.sleep(0.5)  # فاصله بین بخش‌ها
+        return success
+
+    async def send_media(self, chat_id: int, caption: str, file_path: str, media_type: str) -> bool:
         method_map = {
             "photo": "sendPhoto", "video": "sendVideo", "voice": "sendVoice",
             "audio": "sendAudio", "sticker": "sendSticker",
@@ -186,89 +231,83 @@ class BaleClient:
         method = method_map.get(media_type)
         if not method:
             return False
-        url = self.base_url + method
-        data = {"chat_id": chat_id}
+        payload = {"chat_id": chat_id}
         if media_type != "sticker":
-            data["caption"] = caption
-            data["parse_mode"] = "HTML"
-        files = {media_type: open(file_path, "rb")}
-        try:
-            resp = requests.post(url, data=data, files=files, timeout=60)
-            return resp.status_code == 200 and resp.json().get("ok")
-        except Exception:
-            return False
-        finally:
-            files[media_type].close()
+            # اگر کپشن بلند است، باید تقسیم شود – اما برای رسانه فقط یک کپشن می‌توان فرستاد
+            # در صورت بلندی بیش از حد، از ارسال کپشن صرف‌نظر می‌کنیم و هشدار می‌دهیم
+            if len(caption) > MAX_CAPTION_LENGTH:
+                log.warning(f"کپشن رسانه {media_type} طولانی است، کوتاه می‌شود.")
+                caption = caption[:MAX_CAPTION_LENGTH-10] + "..."
+            payload["caption"] = caption
+            payload["parse_mode"] = "Markdown"
+        # فایل را موقت باز می‌کنیم و می‌فرستیم
+        with open(file_path, "rb") as f:
+            files = {media_type: f}
+            # چون _request فایل را می‌بندد، باید دقت شود – در اینجا با باز کردن دستی، فایل در انتهای بلاک بسته می‌شود
+            # اما _request به صورت async کار می‌کند و ممکن است فایل قبل از اتمام بسته شود. برای سادگی، فایل را داخل _request باز می‌کنیم.
+            # بهتر است باز کردن فایل را به _request بسپاریم. برای این کار، files را به صورت دیکشنری با مسیر فایل می‌دهیم و داخل _request باز شود.
+            # در _request فعلاً فایل را باز می‌کند. بنابراین اینجا فقط مسیر را پاس می‌دهیم.
+            pass
+        # روش صحیح: مسیر فایل را به _request بدهیم تا خودش باز کند
+        return await self._request_with_file(method, payload, file_path, media_type)
 
-    def process_admin_commands(self):
-        if not self.token:
-            return
-        url = self.base_url + "getUpdates"
-        params = {"offset": self.last_update_id + 1, "timeout": 2, "limit": 10}
-        try:
-            resp = requests.get(url, params=params, timeout=15)
-            if resp.status_code != 200:
-                return
-            result = resp.json()
-            if not result.get("ok"):
-                return
-            for update in result.get("result", []):
-                self.last_update_id = update["update_id"]
-                msg = update.get("message")
-                if not msg:
-                    continue
-                chat_id = msg["chat"]["id"]
-                text = msg.get("text", "")
-                admin_id = self.state.get_admin_id()
-                if admin_id is None:
-                    self.state.set_admin_id(chat_id)
-                    self.send_message(chat_id, "✅ شما به عنوان ادمین ربات ثبت شدید. ارسال /help برای راهنما.")
-                    admin_id = chat_id
-                elif chat_id != admin_id:
-                    self.send_message(chat_id, "⛔ شما دسترسی ادمین ندارید.")
-                    continue
-
-                if text == "/status":
-                    stats = self.state.data["stats"]
-                    dead_len = len(self.state.get_dead_letter())
-                    last_id_info = "\n".join([f"{ch}: {last_id}" for ch, last_id in self.state.data["last_message_ids"].items()])
-                    status_msg = (
-                        f"📊 **آمار ربات**\n"
-                        f"✅ ارسال موفق: {stats['total_sent']}\n"
-                        f"❌ ناموفق در صف: {dead_len}\n"
-                        f"🕒 آخرین اجرا: {stats.get('last_run', 'ندارد')}\n"
-                        f"📌 **آخرین شناسه کانال‌ها:**\n{last_id_info}"
-                    )
-                    self.send_message(admin_id, status_msg)
-                elif text == "/retry":
-                    self.send_message(admin_id, "🔄 در حال تلاش مجدد برای پیام‌های ناموفق...")
-                    self.state.data["retry_dead_letter"] = True
-                    self.state.save()
-                elif text == "/skip":
-                    self.state.data["skip_current_channel"] = True
-                    self.state.save()
-                    self.send_message(admin_id, "⏭️ کانال فعلی در اجرای بعدی رد می‌شود.")
-                elif text == "/help":
-                    help_msg = (
-                        "🔧 **دستورات ادمین:**\n"
-                        "/status - وضعیت ربات\n"
-                        "/retry - تلاش مجدد برای پیام‌های شکست خورده\n"
-                        "/skip - رد شدن از کانال گیر کرده\n"
-                        "/help - این راهنما"
-                    )
-                    self.send_message(admin_id, help_msg)
-                else:
-                    self.send_message(admin_id, "دستور نامعتبر. /help برای راهنما.")
-            self._save_offset()
-        except Exception as e:
-            log(f"خطا در دریافت دستورات ادمین: {e}", "ERROR")
+    async def _request_with_file(self, method: str, payload: Dict, file_path: str, file_field: str) -> bool:
+        url = self.base_url + method
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                data = aiohttp.FormData()
+                for k, v in payload.items():
+                    data.add_field(k, str(v))
+                with open(file_path, "rb") as f:
+                    data.add_field(file_field, f, filename=os.path.basename(file_path))
+                    async with self._session.post(url, data=data, timeout=60) as resp:
+                        if resp.status == 429:
+                            retry_after = int(resp.headers.get("Retry-After", 5))
+                            await asyncio.sleep(retry_after)
+                            continue
+                        result = await resp.json()
+                        return result.get("ok", False)
+            except Exception as e:
+                log.warning(f"خطا در تلاش {attempt} ارسال فایل: {e}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
+        return False
 
 # ================================ ربات اصلی ================================
 class TelegramToBaleBot:
-    def __init__(self, state_manager: StateManager, bale_client: BaleClient):
+    def __init__(self, state_manager: StateManager, bale_client: BaleAsyncClient):
         self.state = state_manager
         self.bale = bale_client
         self.client: Optional[TelegramClient] = None
+        self.errors_during_run = []  # جمع‌آوری خطاها برای گزارش به ادمین
+
+    async def notify_admin(self, error_text: str):
+        """ارسال پیام خطا به ادمین تلگرام (در صورت وجود)"""
+        if ADMIN_TELEGRAM_ID and self.client and await self.client.is_user_authorized():
+            try:
+                await self.client.send_message(ADMIN_TELEGRAM_ID, f"⚠️ **خطا در ربات:**\n{error_text[:400]}")
+                log.info(f"خطا به ادمین ارسال شد: {error_text[:100]}")
+            except Exception as e:
+                log.error(f"نتوانستیم خطا را به ادمین ارسال کنیم: {e}")
+        else:
+            log.error(f"ادمین تنظیم نشده یا کلاینت آماده نیست: {error_text[:200]}")
+
+    async def send_final_report(self):
+        """ارسال خلاصه آمار و خطاها به ادمین در پایان اجرا"""
+        if not ADMIN_TELEGRAM_ID or not self.client:
+            return
+        stats = self.state.get_stats()
+        dead_count = len(self.state.get_dead_letter())
+        msg = (
+            f"✅ **گزارش پایان اجرای ربات**\n"
+            f"📤 ارسال موفق: {stats['total_sent']}\n"
+            f"❌ پیام‌های ناموفق (dead letter): {dead_count}\n"
+            f"🕒 آخرین اجرا: {stats.get('last_run', 'ندارد')}\n"
+        )
+        if self.errors_during_run:
+            msg += f"\n⚠️ **خطاهای رخ داده:**\n" + "\n".join(f"- {e[:100]}" for e in self.errors_during_run[-5:])
+        await self.client.send_message(ADMIN_TELEGRAM_ID, msg)
+        log.info("گزارش نهایی به ادمین ارسال شد.")
 
     async def connect_telegram(self) -> bool:
         try:
@@ -276,100 +315,95 @@ class TelegramToBaleBot:
             self.client = TelegramClient(session, API_ID, API_HASH)
             await self.client.connect()
             if not await self.client.is_user_authorized():
-                log("احراز هویت نشد. اطلاعات نشست معتبر نیست.", "ERROR")
+                log.error("احراز هویت نشد. اطلاعات نشست معتبر نیست.")
+                await self.notify_admin("اتصال به تلگرام ناموفق: احراز هویت نشد.")
                 return False
-            log("✅ اتصال و احراز هویت موفق")
+            log.info("✅ اتصال و احراز هویت موفق")
             return True
         except Exception as e:
-            log(f"خطا در اتصال به تلگرام: {e}", "ERROR")
+            log.error(f"خطا در اتصال به تلگرام: {e}")
+            await self.notify_admin(f"خطای اتصال به تلگرام: {str(e)[:200]}")
             return False
 
-    async def download_media_safe(self, msg: Message) -> Optional[str]:
+    async def download_media_safe(self, msg: Message) -> Optional[Tuple[str, str]]:
+        """دانلود رسانه و برگرداندن (مسیر_فایل, نوع_رسانه)"""
         media_attr = None
+        media_type = None
         suffix = ".bin"
         if msg.photo:
             media_attr = msg.photo
+            media_type = "photo"
             suffix = ".jpg"
         elif msg.video:
             media_attr = msg.video
+            media_type = "video"
             suffix = ".mp4"
         elif msg.voice:
             media_attr = msg.voice
+            media_type = "voice"
             suffix = ".ogg"
         elif msg.audio:
             media_attr = msg.audio
+            media_type = "audio"
             suffix = ".mp3"
         elif msg.sticker:
             media_attr = msg.sticker
+            media_type = "sticker"
             suffix = ".webp"
         elif getattr(msg, 'animation', None):
             media_attr = msg.animation
+            media_type = "animation"
             suffix = ".mp4"
         elif msg.document:
             media_attr = msg.document
-            doc_name = getattr(msg.document, 'attributes', [])
-            for attr in doc_name:
+            media_type = "document"
+            for attr in getattr(msg.document, 'attributes', []):
                 if hasattr(attr, 'file_name') and attr.file_name:
                     suffix = os.path.splitext(attr.file_name)[1]
                     break
             else:
                 suffix = ".bin"
         else:
-            return None
+            return None, None
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            temp_path = tmp.name
+        fd, temp_path = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
         try:
             await self.client.download_media(media_attr, temp_path)
-            return temp_path
+            return temp_path, media_type
         except Exception as e:
-            log(f"خطا در دانلود رسانه: {e}", "ERROR")
+            log.error(f"خطا در دانلود رسانه: {e}")
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
-            return None
+            return None, None
 
-    async def send_to_bale(self, chat_id: int, caption: str, file_path: Optional[str] = None, media_type: str = "") -> bool:
+    async def send_one_message_to_bale(self, chat_id: int, caption: str, file_path: Optional[str] = None, media_type: str = "") -> bool:
         if file_path and media_type:
-            return self.bale.send_media(chat_id, caption, file_path, media_type)
+            return await self.bale.send_media(chat_id, caption, file_path, media_type)
         else:
-            return self.bale.send_message(chat_id, caption)
+            return await self.bale.send_message(chat_id, caption)
 
-    async def process_message(self, msg: Message, channel_entity, channel_key: str) -> bool:
-        # اصلاح: استفاده از msg.text به جای msg.caption
+    async def process_single_message(self, msg: Message, channel_entity, channel_key: str) -> bool:
         raw_text = msg.text or ""
         cleaned_text = clean_lines_with_mentions(raw_text)
 
-        if hasattr(channel_entity, 'username') and channel_entity.username:
-            post_link = f"https://t.me/{channel_entity.username}/{msg.id}"
-        else:
-            post_link = f"https://t.me/c/{str(channel_entity.id)[4:]}/{msg.id}"
+        # لینک استاندارد با استفاده از خود Telethon
+        try:
+            post_link = await self.client.get_message_link(msg)
+        except Exception:
+            # fallback به روش دستی
+            if hasattr(channel_entity, 'username') and channel_entity.username:
+                post_link = f"https://t.me/{channel_entity.username}/{msg.id}"
+            else:
+                entity_id = str(channel_entity.id).lstrip('-100')
+                post_link = f"https://t.me/c/{entity_id}/{msg.id}"
+
         footer = build_footer(post_link)
         final_caption = (cleaned_text + footer) if cleaned_text else footer
 
-        media_type = None
-        file_path = None
-        if msg.photo:
-            media_type = "photo"
-        elif msg.video:
-            media_type = "video"
-        elif msg.voice:
-            media_type = "voice"
-        elif msg.audio:
-            media_type = "audio"
-        elif msg.sticker:
-            media_type = "sticker"
-        elif getattr(msg, 'animation', None):
-            media_type = "animation"
-        elif msg.document:
-            media_type = "document"
-
-        if media_type:
-            file_path = await self.download_media_safe(msg)
-            if not file_path:
-                log(f"دانلود رسانه پیام {msg.id} ناموفق", "ERROR")
-                return False
-
-        success = await self.send_to_bale(BALE_CHANNEL_ID, final_caption, file_path, media_type if media_type else "")
+        # دانلود رسانه در صورت وجود
+        file_path, media_type = await self.download_media_safe(msg)
+        success = await self.send_one_message_to_bale(BALE_CHANNEL_ID, final_caption, file_path, media_type)
 
         if file_path and os.path.exists(file_path):
             with suppress(Exception):
@@ -380,122 +414,131 @@ class TelegramToBaleBot:
         return success
 
     async def process_channel(self, channel_identifier: str):
-        log(f"--- کانال {channel_identifier} ---")
+        log.info(f"--- شروع پردازش کانال: {channel_identifier} ---")
         try:
             entity = await self.client.get_entity(channel_identifier)
             key = f"@{entity.username}" if entity.username else str(entity.id)
             last_id = self.state.get_last_id(key)
 
+            # اولین اجرا: ذخیره آخرین id
             if last_id == 0:
                 last_msg = await self.client.get_messages(entity, limit=1)
                 if last_msg:
                     new_last = last_msg[0].id
                     self.state.set_last_id(key, new_last)
-                    self.state.save()
-                    log(f"اولین اجرا: آخرین پیام id={new_last} ذخیره شد.")
+                    log.info(f"اولین اجرا: آخرین پیام id={new_last} ذخیره شد.")
                 else:
-                    log(f"کانال {channel_identifier} پیامی ندارد.")
+                    log.warning(f"کانال {channel_identifier} پیامی ندارد.")
                 return
 
-            async for msg in self.client.iter_messages(entity, min_id=last_id, reverse=True, limit=50):
+            # دریافت پیام‌های جدید (با پشتیبانی از آلبوم)
+            # پیام‌ها را بر اساس grouped_id دسته‌بندی می‌کنیم
+            messages = []
+            async for msg in self.client.iter_messages(entity, min_id=last_id, reverse=True):
                 if msg.id <= last_id:
                     continue
+                messages.append(msg)
+                if len(messages) >= 200:  # هر بار حداکثر ۲۰۰ پیام بگیر تا از محدودیت خارج نشویم
+                    break
+
+            if not messages:
+                log.info(f"پیام جدیدی در {channel_identifier} یافت نشد.")
+                return
+
+            # دسته‌بندی بر اساس grouped_id
+            groups: Dict[int, List[Message]] = {}
+            solo_messages = []
+            for msg in messages:
                 if isinstance(msg, MessageService):
-                    log(f"پیام سرویس id={msg.id} رد شد", "DEBUG")
-                    self.state.set_last_id(key, msg.id)
                     continue
-
-                # بررسی وجود رسانه یا متن (با استفاده از msg.text)
-                has_media = any([
-                    msg.photo, msg.video, msg.voice, msg.audio, msg.sticker,
-                    getattr(msg, 'animation', None), msg.document
-                ])
-                text_content = (msg.text or "").strip()
-                if not text_content and not has_media:
-                    log(f"پیام کاملاً خالی id={msg.id}", "DEBUG")
-                    self.state.set_last_id(key, msg.id)
-                    continue
-
-                success = await self.process_message(msg, entity, key)
-                if success:
-                    log(f"✅ پیام {msg.id} ارسال شد")
-                    self.state.set_last_id(key, msg.id)
+                gid = getattr(msg, 'grouped_id', None)
+                if gid:
+                    groups.setdefault(gid, []).append(msg)
                 else:
-                    log(f"❌ ارسال پیام {msg.id} ناموفق – اضافه شدن به Dead Letter")
-                    self.state.add_to_dead_letter(key, msg.id)
+                    solo_messages.append(msg)
 
-                await asyncio.sleep(SLEEP_BETWEEN_MESSAGES)
+            # پردازش پیام‌های تکی
+            for msg in solo_messages:
+                if await self._process_and_update(msg, entity, key):
+                    continue  # موفقیت یا شکست در داخل تابع مدیریت می‌شود
 
-        except FloodWaitError as e:
-            log(f"محدودیت تلگرام: {e.seconds} ثانیه صبر", "WARNING")
+            # پردازش گروه‌ها (آلبوم)
+            for gid, group_msgs in groups.items():
+                # ارسال هر یک از اعضای گروه به صورت جداگانه با فاصله
+                log.info(f"آلبوم با {len(group_msgs)} رسانه یافت شد (grouped_id={gid})")
+                for msg in sorted(group_msgs, key=lambda m: m.id):
+                    await self._process_and_update(msg, entity, key)
+                    await asyncio.sleep(SLEEP_BETWEEN_MESSAGES)
+
+        except errors.FloodWaitError as e:
+            log.warning(f"FloodWait در تلگرام: {e.seconds} ثانیه صبر")
+            await self.notify_admin(f"FloodWait در کانال {channel_identifier}: {e.seconds} ثانیه")
             await asyncio.sleep(e.seconds)
-        except RPCError as e:
-            log(f"خطای RPC در کانال {channel_identifier}: {e}", "ERROR")
+        except errors.RPCError as e:
+            log.error(f"خطای RPC در کانال {channel_identifier}: {e}")
+            await self.notify_admin(f"خطای RPC در {channel_identifier}: {str(e)[:200]}")
         except Exception as e:
-            log(f"خطای غیرمنتظره در کانال {channel_identifier}: {e}", "ERROR")
+            log.error(f"خطای غیرمنتظره در کانال {channel_identifier}: {e}")
             traceback.print_exc()
+            self.errors_during_run.append(f"{channel_identifier}: {str(e)[:100]}")
+            await self.notify_admin(f"خطا در {channel_identifier}: {str(e)[:200]}")
 
-    async def process_dead_letter(self):
-        dead_list = self.state.get_dead_letter()
-        if not dead_list:
-            return
-        log(f"🔁 تلاش مجدد برای {len(dead_list)} پیام ناموفق")
-        new_dead = []
-        for item in dead_list:
-            channel = item["channel"]
-            msg_id = item["msg_id"]
-            try:
-                entity = await self.client.get_entity(channel)
-                msg = await self.client.get_messages(entity, ids=msg_id)
-                if msg:
-                    success = await self.process_message(msg, entity, channel)
-                    if success:
-                        log(f"🔁 پیام ناموفق {msg_id} مجدداً ارسال شد")
-                        continue
-            except Exception as e:
-                log(f"خطا در بازیابی پیام {msg_id}: {e}", "ERROR")
-            new_dead.append(item)
-        self.state.data["dead_letter"] = new_dead
-        self.state.save()
+    async def _process_and_update(self, msg: Message, entity, key: str) -> bool:
+        """پردازش یک پیام و به‌روزرسانی last_id در صورت موفقیت/شکست"""
+        try:
+            # بررسی وجود محتوا
+            has_media = bool(msg.photo or msg.video or msg.voice or msg.audio or msg.sticker or
+                             getattr(msg, 'animation', None) or msg.document)
+            text_content = (msg.text or "").strip()
+            if not text_content and not has_media:
+                log.debug(f"پیام خالی id={msg.id} رد شد")
+                self.state.set_last_id(key, msg.id)
+                return True
+
+            success = await self.process_single_message(msg, entity, key)
+            if success:
+                log.info(f"✅ پیام {msg.id} ارسال شد")
+                self.state.set_last_id(key, msg.id)
+            else:
+                log.error(f"❌ ارسال پیام {msg.id} ناموفق – اضافه شدن به Dead Letter")
+                self.state.add_to_dead_letter(key, msg.id)
+                self.state.set_last_id(key, msg.id)   # رد کردن برای جلوگیری از تکرار
+            return success
+        except Exception as e:
+            log.error(f"خطا در پردازش پیام {msg.id}: {e}")
+            self.state.set_last_id(key, msg.id)
+            return False
 
     async def run(self):
-        log("=== راه‌اندازی ربات حرفه‌ای انتقال تلگرام به بله ===")
+        log.info("=== راه‌اندازی ربات حرفه‌ای انتقال تلگرام به بله ===")
         if not await self.connect_telegram():
             return
-        self.bale.process_admin_commands()
 
-        if self.state.data.get("retry_dead_letter", False):
-            await self.process_dead_letter()
-            self.state.data["retry_dead_letter"] = False
-            self.state.save()
+        async with self.bale:
+            # پردازش کانال‌های منبع
+            for chan in SOURCE_CHANNELS:
+                await self.process_channel(chan)
 
-        for chan in SOURCE_CHANNELS:
-            if self.state.data.get("skip_current_channel", False):
-                self.state.data["skip_current_channel"] = False
-                self.state.save()
-                log("اسکیپ کانال فعلی درخواست شده، ادامه می‌دهیم...")
-                continue
-            await self.process_channel(chan)
+            self.state.set_last_run()
+            # ارسال گزارش نهایی به ادمین
+            await self.send_final_report()
 
-        self.state.data["stats"]["last_run"] = datetime.now().isoformat()
-        self.state.save()
         await self.client.disconnect()
-        log("=== پایان اجرا ===")
+        log.info("=== پایان اجرا ===")
 
 # ================================ اجرای اصلی ================================
 async def main():
     if not all([API_ID, API_HASH, DC_ID, AUTH_KEY_HEX]):
-        log("API_ID, API_HASH, DC_ID, AUTH_KEY_HEX الزامی هستند", "ERROR")
+        log.error("API_ID, API_HASH, DC_ID, AUTH_KEY_HEX الزامی هستند")
         return
     if not BALE_BOT_TOKEN or BALE_CHANNEL_ID == 0:
-        log("BALE_BOT_TOKEN یا BALE_CHANNEL_ID تنظیم نشده", "ERROR")
+        log.error("BALE_BOT_TOKEN یا BALE_CHANNEL_ID تنظیم نشده")
         return
     if not SOURCE_CHANNELS:
-        log("هیچ کانال منبعی تعریف نشده", "WARNING")
-        return
+        log.warning("هیچ کانال منبعی تعریف نشده")
 
     state = StateManager()
-    bale = BaleClient(BALE_BOT_TOKEN, state)
+    bale = BaleAsyncClient(BALE_BOT_TOKEN)
     bot = TelegramToBaleBot(state, bale)
     await bot.run()
 
@@ -503,7 +546,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log("اسکریپت توسط کاربر متوقف شد", "WARNING")
+        log.info("اسکریپت توسط کاربر متوقف شد")
     except Exception as e:
-        log(f"خطای سطح بالا: {e}", "ERROR")
+        log.error(f"خطای سطح بالا: {e}")
         traceback.print_exc()
