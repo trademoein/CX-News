@@ -559,7 +559,7 @@
   "stats": {
     "total_sent": 1555,
     "total_failed": 110,
-    "last_run": "2026-05-14T08:20:36.344693"
+    "last_run": "2026-05-14T08:25:34.600427"
   },
   "bale_last_update_id": 578,
   "retry_dead_letter": false,
