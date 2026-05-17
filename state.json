@@ -1,6 +1,6 @@
 {
   "last_message_ids": {
-    "@iamusd": 69256,
+    "@iamusd": 69258,
     "@UtoFx": 86611
   },
   "dead_letter": [
@@ -586,9 +586,9 @@
     }
   ],
   "stats": {
-    "total_sent": 1846,
+    "total_sent": 1848,
     "total_failed": 116,
-    "last_run": "2026-05-17T17:55:21.831744"
+    "last_run": "2026-05-17T18:00:35.806990"
   },
   "admin_id": 1107331427,
   "bale_last_update_id": 583,
