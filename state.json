@@ -1,7 +1,7 @@
 {
   "last_message_ids": {
     "@iamusd": 71373,
-    "@UtoFx": 89178
+    "@UtoFx": 89179
   },
   "dead_letter": [
     {
@@ -1068,11 +1068,16 @@
       "channel": "@UtoFx",
       "msg_id": 89175,
       "added_at": "2026-06-22T15:05:48.267713"
+    },
+    {
+      "channel": "@UtoFx",
+      "msg_id": 89179,
+      "added_at": "2026-06-22T16:11:28.407734"
     }
   ],
   "stats": {
     "total_sent": 3515,
-    "total_failed": 213,
-    "last_run": "2026-06-22T16:05:42.213140"
+    "total_failed": 214,
+    "last_run": "2026-06-22T16:11:28.410555"
   }
 }
