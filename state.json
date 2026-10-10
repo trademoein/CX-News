@@ -1,7 +1,7 @@
 {
   "last_message_ids": {
     "@iamusd": 77012,
-    "@UtoFx": 97460
+    "@UtoFx": 97461
   },
   "dead_letter": [
     {
@@ -1581,8 +1581,8 @@
     }
   ],
   "stats": {
-    "total_sent": 17000,
+    "total_sent": 17001,
     "total_failed": 315,
-    "last_run": "2026-10-10T16:35:31.669958"
+    "last_run": "2026-10-10T16:40:43.740287"
   }
 }
